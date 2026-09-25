@@ -334,10 +334,17 @@ async function handlePayTechInitiate(req: Request, res: Response) {
     }
 
     const config = getPayTechConfig();
-    // PAYTECH_ENV assaini pour garantir que `if (PAYTECH_ENV === 'prod')` fonctionne sans erreur
-    const PAYTECH_ENV = req.body.env ? sanitizePaytechEnv(req.body.env) : config.PAYTECH_ENV;
-    const envMode = PAYTECH_ENV;
+    // L’environnement de paiement est contrôlé côté serveur, jamais par le navigateur.
+    const envMode = config.PAYTECH_ENV;
     const { apiKey, apiSecret, isConfigured } = config;
+
+    // En production, ne jamais créer un faux lien de paiement si les clés manquent.
+    if (envMode === 'prod' && !isConfigured) {
+      return res.status(503).json({
+        success: false,
+        error: 'Le paiement en production est indisponible : vérifiez la configuration PayTech du serveur.'
+      });
+    }
 
     // 2. Récupération dynamique de la variable BASE_URL
     const BASE_URL = getBaseUrl(req);
@@ -433,46 +440,6 @@ async function handlePayTechInitiate(req: Request, res: Response) {
       } else {
         const errorMsg = responseData.message || (Array.isArray(responseData.error) ? responseData.error.join(', ') : responseData.error) || 'Erreur lors de l’initialisation PayTech.';
         console.warn(`[PayTech Warning] Réponse PayTech: ${errorMsg}`);
-
-        // Si le compte configuré en 'prod' n'est pas encore activé par l'équipe PayTech,
-        // on effectue une tentative automatique en mode 'test' avec les mêmes clés pour générer le lien PayTech réel
-        if (envMode === 'prod' && typeof errorMsg === 'string' && errorMsg.includes('activer votre compte')) {
-          console.warn('[PayTech] Compte production en attente d\'activation PayTech. Tentative automatique avec env="test"...');
-          try {
-            const retryPayload = { ...payload, env: 'test' };
-            const retryResp = await fetch('https://paytech.sn/api/payment/request-payment', {
-              method: 'POST',
-              headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'API_KEY': apiKey,
-                'API_SECRET': apiSecret
-              },
-              body: JSON.stringify(retryPayload)
-            });
-            if (retryResp.ok) {
-              const retryData = (await retryResp.json()) as any;
-              if (retryData.success === 1 || retryData.token || retryData.redirect_url || retryData.redirectUrl) {
-                const redirectUrl = retryData.redirect_url || retryData.redirectUrl || (retryData.token ? `https://paytech.sn/payment/checkout/${retryData.token}` : '');
-                const token = retryData.token || `PT-${Date.now()}`;
-                newOrder.paytechToken = token;
-                newOrder.paytechPaymentUrl = redirectUrl;
-                ordersStore.set(ref_command, newOrder);
-        try { await saveOrderToSupabase({ ...newOrder, id: newOrder.ref_command, orderNumber: newOrder.ref_command }); } catch (dbError) { console.error('[Supabase Order Save]', dbError); }
-                return res.status(200).json({
-                  success: true,
-                  token: token,
-                  redirect_url: redirectUrl,
-                  ref_command: ref_command,
-                  mode: 'test_fallback',
-                  notice: 'Lien de test PayTech généré avec succès en attendant l\'activation finale de votre compte par le support PayTech.'
-                });
-              }
-            }
-          } catch (retryErr) {
-            console.error('[PayTech Retry Error]:', retryErr);
-          }
-        }
 
         // En mode test, si le compte PayTech nécessite une activation manuelle auprès du support PayTech,
         // on fournit une simulation Sandbox pour permettre de tester tout le parcours sans blocage.
