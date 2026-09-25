@@ -136,8 +136,9 @@ async function supabaseRequest(endpoint: string, options: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function supabaseUpsert(table: string, rows: any[]) {
-  return supabaseRequest(`/rest/v1/${table}`, {
+async function supabaseUpsert(table: string, rows: any[], onConflict?: string) {
+  const conflictQuery = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : '';
+  return supabaseRequest(`/rest/v1/${table}${conflictQuery}`, {
     method: 'POST',
     headers: {
       Prefer: 'resolution=merge-duplicates,return=representation'
@@ -165,7 +166,7 @@ async function saveOrderToSupabase(order: any) {
     paid_at: order.paidAt || order.paid_at || null,
     created_at: order.createdAt || order.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString()
-  }]);
+  }], 'order_number');
 }
 
 async function findOrderInSupabase(ref: string) {
@@ -533,20 +534,24 @@ async function handlePayTechIPN(req: Request, res: Response) {
     const { apiKey, apiSecret, isConfigured } = getPayTechConfig();
 
     // VÉRIFICATION DE SÉCURITÉ DU HASH PAYTECH
-    if (isConfigured) {
-      const expectedApiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-      const expectedApiSecretHash = crypto.createHash('sha256').update(apiSecret).digest('hex');
+    if (!isConfigured) {
+      console.error('[PayTech IPN] Clés PayTech absentes : notification rejetée.');
+      return res.status(503).json({ success: 0, error: 'Vérification PayTech indisponible.' });
+    }
 
-      const isKeyValid = api_key_sha256 ? api_key_sha256 === expectedApiKeyHash : true;
-      const isSecretValid = api_secret_sha256 === expectedApiSecretHash;
+    const expectedApiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    const expectedApiSecretHash = crypto.createHash('sha256').update(apiSecret).digest('hex');
+    const matchesHash = (received: unknown, expected: string) => {
+      if (typeof received !== 'string' || !/^[a-f0-9]{64}$/i.test(received)) return false;
+      return crypto.timingSafeEqual(Buffer.from(received, 'hex'), Buffer.from(expected, 'hex'));
+    };
 
-      if (!isSecretValid || !isKeyValid) {
-        console.error('[PayTech IPN] Échec de validation du hash de sécurité ! Requête rejetée.');
-        return res.status(403).json({
-          success: 0,
-          error: 'Hash de sécurité PayTech invalide. Requête non autorisée.'
-        });
-      }
+    if (!matchesHash(api_key_sha256, expectedApiKeyHash) || !matchesHash(api_secret_sha256, expectedApiSecretHash)) {
+      console.error('[PayTech IPN] Échec de validation du hash de sécurité ! Requête rejetée.');
+      return res.status(403).json({
+        success: 0,
+        error: 'Hash de sécurité PayTech invalide. Requête non autorisée.'
+      });
     }
 
     // MISE À JOUR DU STATUT DE LA COMMANDE
@@ -603,21 +608,6 @@ app.post('/api/paytech/ipn', handlePayTechIPN);
 // ---------------------------------------------------------------------------
 async function handlePaymentSuccess(req: Request, res: Response) {
   const ref = String(req.query.ref_command || req.query.ref || req.body?.ref_command || req.body?.ref || 'SOL-2026');
-  const order = ordersStore.get(ref);
-
-  if (order) {
-    order.status = 'payé';
-    order.paidAt = order.paidAt || new Date().toISOString();
-    ordersStore.set(ref, order);
-  }
-  // La redirection navigateur n'est pas la preuve de paiement, mais on
-  // conserve l'information si PayTech renvoie sur cette URL. L'IPN reste
-  // la source d'autorité pour les paiements réels.
-  try {
-    await updateOrderInSupabase(ref, { status: 'payé', paidAt: order?.paidAt || new Date().toISOString() });
-  } catch (dbError) {
-    console.error('[Supabase Success Save]', dbError);
-  }
 
   res.send(`
     <!doctype html>
@@ -625,7 +615,7 @@ async function handlePaymentSuccess(req: Request, res: Response) {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Paiement Réussi — Solena Clothing</title>
+        <title>Retour de paiement — Solena Clothing</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet">
@@ -709,8 +699,8 @@ async function handlePaymentSuccess(req: Request, res: Response) {
       <body>
         <div class="card">
           <div class="icon-circle">✓</div>
-          <h1>Paiement PayTech Confirmé !</h1>
-          <p>Merci pour votre confiance. Votre transaction a été validée avec succès auprès de PayTech. Notre atelier prépare soigneusement votre commande.</p>
+          <h1>Paiement en cours de vérification</h1>
+          <p>Merci. PayTech nous transmet la confirmation de votre paiement. Le statut de la commande sera mis à jour après réception de cette confirmation.</p>
           <div class="badge">Référence : ${ref}</div>
           <div>
             <a href="/" class="btn">Retourner à la boutique Solena</a>
