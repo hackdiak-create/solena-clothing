@@ -1030,7 +1030,7 @@ app.post('/api/upload', requireAdmin, async (req: Request, res: Response) => {
 });
 
 // Endpoint pour consulter le statut d'une commande
-app.get('/api/orders/:ref', async (req: Request, res: Response) => {
+app.get('/api/orders/:ref', requireAdmin, async (req: Request, res: Response) => {
   const ref = req.params.ref;
   try {
     const dbRow = await findOrderInSupabase(ref);
@@ -1046,9 +1046,13 @@ app.get('/api/orders/:ref', async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // STOCKAGE PERSISTANT DU CATALOGUE / CONTENU / COMMANDES
 // ---------------------------------------------------------------------------
-app.get('/api/store/snapshot', async (_req: Request, res: Response) => {
+app.get('/api/store/snapshot', async (req: Request, res: Response) => {
   try {
-    return res.status(200).json(await listStoreSnapshot());
+    const snapshot = await listStoreSnapshot();
+    // The storefront needs public catalogue/content, but order records contain
+    // customers' personal data and must only be returned to the authenticated manager.
+    if (!isAdminAuthenticated(req)) snapshot.orders = [];
+    return res.status(200).json(snapshot);
   } catch (error: any) {
     console.error('[Supabase Snapshot]', error);
     return res.status(503).json({ success: false, error: error.message || 'Supabase indisponible.' });
