@@ -1,0 +1,6 @@
+{
+  "name": "Solena Clothing",
+  "description": "Boutique de prêt-à-porter élégant Solena Clothing — Collections Femme, Homme et Pyjamas Unisexe avec espace de gestion dédié.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
