@@ -87,7 +87,16 @@ export default function AdminApp() {
     catch (e) { setError((e as Error).message); }
   }
   function updateContent(path: string[], value: unknown) {
-    setContent(prev => { const next = structuredClone(prev); let cursor = next; for (const key of path.slice(0, -1)) cursor[key] = { ...(cursor[key] || {}) }; cursor[path[path.length - 1]] = value; return next; });
+    setContent(prev => {
+      const next = structuredClone(prev);
+      let cursor = next;
+      for (const key of path.slice(0, -1)) {
+        cursor[key] = { ...(cursor[key] || {}) };
+        cursor = cursor[key];
+      }
+      cursor[path[path.length - 1]] = value;
+      return next;
+    });
     if (contentTimer.current) clearTimeout(contentTimer.current);
     contentTimer.current = setTimeout(async () => { try { setSaving(true); await api('/api/store/content', { method: 'PUT', body: JSON.stringify(contentRef.current) }); setNotice('Modifications enregistrées automatiquement.'); } catch (e) { setError((e as Error).message); } finally { setSaving(false); } }, 700);
   }
