@@ -325,13 +325,43 @@ function getBaseUrl(req?: Request): string {
  */
 async function handlePayTechInitiate(req: Request, res: Response) {
   try {
-    const { item_name, item_price, ref_command, command_name, customer, custom_field } = req.body;
+    const { item_name, item_price, ref_command, command_name, customer, custom_field, promo_code, original_subtotal, discount_amount } = req.body;
 
     if (!item_name || !item_price || !ref_command) {
       return res.status(400).json({
         success: false,
         error: 'Champs obligatoires manquants : item_name, item_price, ref_command sont requis.'
       });
+    }
+
+    // Promo discounts are checked against the manager's saved configuration.
+    // This prevents a browser from choosing an arbitrary discounted payment amount.
+    if (promo_code || original_subtotal !== undefined || discount_amount !== undefined) {
+      const originalSubtotal = Number(original_subtotal);
+      const submittedDiscount = Number(discount_amount || 0);
+      const submittedPrice = Number(item_price);
+      if (!Number.isFinite(originalSubtotal) || originalSubtotal <= 0 || !Number.isFinite(submittedDiscount) || submittedDiscount < 0) {
+        return res.status(400).json({ success: false, error: 'Montant de commande invalide.' });
+      }
+      let expectedDiscount = 0;
+      if (promo_code) {
+        const snapshot = await listStoreSnapshot();
+        const code = String(promo_code).trim().toUpperCase();
+        const promotion = Array.isArray(snapshot.content?.promotions)
+          ? snapshot.content.promotions.find((entry: any) => String(entry.code || '').trim().toUpperCase() === code && entry.active !== false)
+          : null;
+        const expired = promotion?.expiresAt && new Date(`${promotion.expiresAt}T23:59:59`).getTime() < Date.now();
+        if (!promotion || expired || originalSubtotal < Number(promotion.minimumSubtotal || 0)) {
+          return res.status(400).json({ success: false, error: 'Ce code promotionnel est invalide ou ne peut pas être appliqué.' });
+        }
+        const value = Math.max(0, Number(promotion.value) || 0);
+        expectedDiscount = Math.min(Math.max(0, originalSubtotal - 1), promotion.type === 'fixed'
+          ? value
+          : Math.round(originalSubtotal * Math.min(99, value) / 100));
+      }
+      if (submittedDiscount !== expectedDiscount || submittedPrice !== originalSubtotal - expectedDiscount) {
+        return res.status(400).json({ success: false, error: 'Le montant de la promotion ne correspond pas au panier. Actualisez la page et réessayez.' });
+      }
     }
 
     const config = getPayTechConfig();
