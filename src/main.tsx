@@ -1,6 +1,6 @@
 import './index.css';
 
-if (window.location.pathname.replace(/\\/+$/, '') === '/admin') {
+if (window.location.pathname.replace(/\/+$/, '') === '/admin') {
   import('./AdminApp').then(async ({ default: AdminApp }) => {
     const { createRoot } = await import('react-dom/client');
     const rootElement = document.getElementById('root');
